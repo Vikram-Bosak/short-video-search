@@ -1,69 +1,181 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import SearchBar from "../components/SearchBar";
+import PlatformFilter from "../components/PlatformFilter";
+import VideoGrid from "../components/VideoGrid";
+import LoadingCards from "../components/LoadingCards";
+import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
+import { Platform, VideoResult } from "../lib/search/types";
+
+function HomeContent() {
+  const searchParams = useSearchParams();
+  const initialQ = searchParams.get('q') || "";
+  
+  const [query, setQuery] = useState(initialQ);
+  const [platforms, setPlatforms] = useState<Platform[]>(["youtube", "tiktok", "instagram", "facebook"]);
+  const [results, setResults] = useState<VideoResult[]>([]);
+  const [stats, setStats] = useState<Record<string, number>>({});
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [hasSearched, setHasSearched] = useState(false);
+  const [savedUrls, setSavedUrls] = useState<Set<string>>(new Set());
+  const [showRanking, setShowRanking] = useState(false);
+
+  // Load saved state from local storage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('saved_videos');
+      if (saved) {
+        const parsed: VideoResult[] = JSON.parse(saved);
+        setSavedUrls(new Set(parsed.map(v => v.url)));
+      }
+    } catch (e) {
+      console.error("Failed to load saved videos");
+    }
+    
+    // Auto search if query param is present
+    if (initialQ && !hasSearched && !isLoading) {
+      handleSearch(initialQ);
+    }
+  }, [initialQ]);
+
+  const handleSearch = async (keyword: string) => {
+    if (!keyword.trim() || platforms.length === 0) return;
+    
+    setQuery(keyword);
+    setIsLoading(true);
+    setError("");
+    setHasSearched(true);
+    setResults([]);
+    
+    // Save to history
+    try {
+      const historyStr = localStorage.getItem('search_history');
+      let history: string[] = historyStr ? JSON.parse(historyStr) : [];
+      history = [keyword, ...history.filter(h => h !== keyword)].slice(0, 20);
+      localStorage.setItem('search_history', JSON.stringify(history));
+    } catch (e) {}
+    
+    try {
+      const platformParam = platforms.join(',');
+      const res = await fetch(`/api/search?q=${encodeURIComponent(keyword)}&platforms=${platformParam}`);
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to fetch results");
+      }
+      
+      setResults(data.results || []);
+      setStats(data.stats || {});
+    } catch (err: any) {
+      setError(err.message || "An unexpected error occurred");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSaveToggle = (video: VideoResult, isSaved: boolean) => {
+    try {
+      const savedStr = localStorage.getItem('saved_videos');
+      let saved: VideoResult[] = savedStr ? JSON.parse(savedStr) : [];
+      
+      if (isSaved) {
+        // Add to saved
+        if (!saved.some(v => v.url === video.url)) {
+          saved.push(video);
+        }
+        setSavedUrls(prev => new Set([...prev, video.url]));
+      } else {
+        // Remove from saved
+        saved = saved.filter(v => v.url !== video.url);
+        setSavedUrls(prev => {
+          const next = new Set(prev);
+          next.delete(video.url);
+          return next;
+        });
+      }
+      
+      localStorage.setItem('saved_videos', JSON.stringify(saved));
+    } catch (e) {
+      console.error("Failed to update saved videos");
+    }
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-in fade-in duration-500">
+      <div className="text-center mb-10 pt-10">
+        <h1 className="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 tracking-tight mb-4 pb-2">
+          Find Short Videos Faster
+        </h1>
+        <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto font-medium">
+          Search short-form videos across YouTube, TikTok, Instagram & Facebook. No API keys required.
+        </p>
+      </div>
+
+      <SearchBar onSearch={handleSearch} isLoading={isLoading} initialValue={query} />
+      
+      <PlatformFilter 
+        selectedPlatforms={platforms} 
+        onChange={setPlatforms} 
+        disabled={isLoading}
+      />
+
+      {/* Main Content Area */}
+      <div className="mt-16">
+        {isLoading && <LoadingCards />}
+        
+        {error && <ErrorState message={error} />}
+        
+        {!isLoading && !error && hasSearched && results.length === 0 && (
+          <EmptyState query={query} />
+        )}
+        
+        {!isLoading && !error && hasSearched && results.length > 0 && (
+          <div className="animate-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4 bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+              <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">
+                Found <span className="text-indigo-600 dark:text-indigo-400">{results.length}</span> results for &quot;{query}&quot;
+              </h2>
+              
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-semibold text-gray-600 dark:text-gray-300">Ranking Mode</span>
+                  <button 
+                    onClick={() => setShowRanking(!showRanking)}
+                    className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${showRanking ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                  >
+                    <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-200 ease-in-out ${showRanking ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            {showRanking && (
+              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/30 dark:to-purple-900/30 border border-indigo-100 dark:border-indigo-800 text-indigo-800 dark:text-indigo-300 p-4 rounded-xl mb-8 text-sm flex items-center justify-center text-center shadow-sm">
+                <p className="font-medium">⚠️ Ranking based on this tool&apos;s internal relevance signals. Not an official platform ranking.</p>
+              </div>
+            )}
+            
+            <VideoGrid 
+              videos={results} 
+              savedUrls={savedUrls} 
+              onSaveToggle={handleSaveToggle}
+              showRanking={showRanking}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <Suspense fallback={<div className="flex justify-center p-20"><div className="animate-pulse font-bold text-xl text-gray-400">Loading search...</div></div>}>
+      <HomeContent />
+    </Suspense>
   );
 }
